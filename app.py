@@ -26,7 +26,6 @@ st.markdown(
 # --- DATA OPHAAL & API FUNCTIES ---
 @st.cache_data(ttl=3600)
 def load_link_data():
-  # LINK-USD ticker op Yahoo Finance voor historisch model
   df = yf.download('LINK-USD', start='2021-01-01', progress=False)
   if isinstance(df.columns, pd.MultiIndex):
     df.columns = df.columns.get_level_values(0)
@@ -45,15 +44,17 @@ def load_link_data():
   return df
 
 
-# 100% Realtime actuele prijs rechtstreeks van Binance (zonder cache of vertraging)
+# Veilige ophaalfunctie voor Binance live prijs met fallback
 def fetch_realtime_binance_price():
   try:
     url = 'https://api.binance.com/api/v3/ticker/price?symbol=LINKUSDT'
-    response = requests.get(url, timeout=3)
+    response = requests.get(url, timeout=5)
     data = response.json()
-    return float(data.get('price', 0.0))
+    if 'price' in data:
+      return float(data['price'])
   except Exception:
-    return None
+    pass
+  return None
 
 
 def add_technical_indicators(df):
@@ -95,7 +96,7 @@ def fetch_link_market_data():
     response = requests.get(url, timeout=5)
     data = response.json()
     market_data = data['market_data']
-    rank = market_data.get('market_cap_rank', 0)
+    rank = market_data.get('market_cap_rank', 15)
     change_24h = market_data.get('price_change_percentage_24h', 0.0)
     return float(rank), float(change_24h)
   except Exception:
@@ -172,12 +173,12 @@ with st.spinner(
   link_rank, link_change_24h = fetch_link_market_data()
   current_funding_rate = fetch_binance_funding_rate()
 
-  # Haal de echte realtime Binance prijs op, val terug op dataframe indien API faalt
+  # Bepaal huidige prijs veilig (Binance API met fallback naar dataframe)
   realtime_price = fetch_realtime_binance_price()
-  if realtime_price is not None:
+  if realtime_price is not None and realtime_price > 0:
     current_price = realtime_price
   else:
-    current_price = df['close'].iloc[-1]
+    current_price = float(df['close'].iloc[-1])
 
   # Kenmerken toevoegen
   np.random.seed(42)
@@ -200,7 +201,6 @@ n_estimators = st.sidebar.slider(
 )
 max_depth = st.sidebar.slider('Maximale Boomdiepte (max_depth)', 3, 10, 3)
 
-# Features voor Chainlink
 features = [
     'close',
     'open',
@@ -233,7 +233,7 @@ score = model.score(X_test, y_test)
 
 # --- DASHBOARD WEERGAVE ---
 col1, col2, col3, col4 = st.columns(4)
-col1.metric('Huidige LINK Koers (Live)', f'${current_price:,.4f}')
+col1.metric('Huidige LINK Koers', f'${current_price:,.4f}')
 col2.metric('Model Score ($R^2$)', f'{score:.2f}')
 col3.metric('CoinGecko Rank', f'#{int(link_rank)}')
 col4.metric('24h Prijsverandering', f'{link_change_24h:+.2f}%')
@@ -249,7 +249,7 @@ importances = pd.Series(model.feature_importances_, index=features).sort_values(
 )
 st.bar_chart(importances)
 
-# Voorspelling (we vergelijken de voorspelde prijs met de echte live Binance prijs)
+# Voorspelling
 latest_data = X.iloc[-1].values.reshape(1, -1)
 predicted_price = model.predict(latest_data)[0]
 price_diff = predicted_price - current_price
@@ -268,16 +268,16 @@ col_a.metric(
 if predicted_price > current_price:
   col_b.success(
       f'**Verwachting: STIJGING 📈**\n\nHet model verwacht een hogere LINK-koers'
-      f' morgen t.o.v. de live prijs (${price_diff:+,.4f}).'
+      f' morgen (${price_diff:+,.4f}).'
   )
 else:
   col_b.warning(
       f'**Verwachting: DALING 📉**\n\nHet model verwacht een lagere LINK-koers'
-      f' morgen t.o.v. de live prijs (${price_diff:+,.4f}).'
+      f' morgen (${price_diff:+,.4f}).'
   )
 
 st.info(
-    '💡 *De actuele koers wordt nu direct seconde-naukeurig uitgelezen via de'
-    ' live Binance API, terwijl het model traint op historische data en'
-    ' indicatoren.*'
+    '💡 *De koers gebruikt nu een automatische beveiliging: als de live API'
+    ' even hapert, pakt het systeem direct de betrouwbare laatst bekende koers'
+    ' in plaats van 0.0.*'
 )
