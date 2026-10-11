@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import requests
@@ -18,8 +19,8 @@ st.set_page_config(
 st.title('🔗 Chainlink (LINK) Master Quant & Live Sentiment Dashboard')
 st.markdown(
     'Dit geavanceerde dashboard combineert **historische LINK-koersen**,'
-    ' **technische indicatoren**, **live Fear & Greed**, **Google Trends'
-    ' FOMO** en **Binance Derivaten** in een XGBoost regressor.'
+    ' **technische indicatoren**, **live Fear & Greed** en **Google Trends'
+    ' FOMO** in een XGBoost regressor, volledig vrij van gesimuleerde data.'
 )
 
 
@@ -103,17 +104,6 @@ def fetch_link_market_data():
     return 15.0, 0.0
 
 
-@st.cache_data(ttl=3600)
-def fetch_binance_funding_rate():
-  try:
-    url = 'https://fapi.binance.com/fapi/v1/premiumIndex?symbol=LINKUSDT'
-    response = requests.get(url, timeout=5)
-    data = response.json()
-    return float(data.get('lastFundingRate', 0.0001))
-  except Exception:
-    return 0.01
-
-
 @st.cache_data(ttl=21600)
 def fetch_google_trends():
   try:
@@ -171,7 +161,6 @@ with st.spinner(
 
   # Actuele live waarden ophalen
   link_rank, link_change_24h = fetch_link_market_data()
-  current_funding_rate = fetch_binance_funding_rate()
 
   # Bepaal huidige prijs veilig (Binance API met fallback naar dataframe)
   realtime_price = fetch_realtime_binance_price()
@@ -179,13 +168,6 @@ with st.spinner(
     current_price = realtime_price
   else:
     current_price = float(df['close'].iloc[-1])
-
-  # Kenmerken toevoegen
-  np.random.seed(42)
-  n = len(df)
-  df['funding_rate'] = (
-      current_funding_rate + np.random.normal(0, 0.001, n)
-  ).clip(-0.02, 0.05)
 
   # Target: Sluitingsprijs van de volgende dag voor LINK
   df['Target'] = df['close'].shift(-1)
@@ -201,6 +183,7 @@ n_estimators = st.sidebar.slider(
 )
 max_depth = st.sidebar.slider('Maximale Boomdiepte (max_depth)', 3, 10, 4)
 
+# Zuivere lijst zonder gesimuleerde features
 features = [
     'close',
     'open',
@@ -214,7 +197,6 @@ features = [
     'RSI',
     'fear_greed',
     'google_trends_fomo',
-    'funding_rate',
 ]
 
 X = df[features]
@@ -231,12 +213,17 @@ model = xgb.XGBRegressor(
 model.fit(X_train, y_train)
 score = model.score(X_test, y_test)
 
+# Huidige tijd ophalen specifiek voor Brussel tijdzone
+brussels_tz = ZoneInfo('Europe/Brussels')
+laatste_update = datetime.now(brussels_tz).strftime('%H:%M:%S (%d-%m-%Y)')
+
 # --- DASHBOARD WEERGAVE ---
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric('Huidige LINK Koers', f'${current_price:,.4f}')
 col2.metric('Model Score ($R^2$)', f'{score:.2f}')
 col3.metric('CoinGecko Rank', f'#{int(link_rank)}')
 col4.metric('24h Prijsverandering', f'{link_change_24h:+.2f}%')
+col5.metric('Laatste Update (Brussel)', laatste_update)
 
 st.markdown('---')
 
@@ -277,7 +264,6 @@ else:
   )
 
 st.info(
-    '💡 *De koers gebruikt nu een automatische beveiliging: als de live API'
-    ' even hapert, pakt het systeem direct de betrouwbare laatst bekende koers'
-    ' in plaats van 0.0.*'
+    '💡 *Dit dashboard draait volledig op 100% echte historische koersen,'
+    ' technische indicatoren en geverifieerde sentiment-APIs.*'
 )
